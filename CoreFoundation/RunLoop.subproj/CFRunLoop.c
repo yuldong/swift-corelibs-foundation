@@ -2763,16 +2763,17 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
         
         __CFRunLoopUnsetIgnoreWakeUps(rl);
         
+        // 处理timers
         if (rlm->_observerMask & kCFRunLoopBeforeTimers) {
             __CFRunLoopDoObservers(rl, rlm, kCFRunLoopBeforeTimers);
         }
-        
+        // 处理sources
         if (rlm->_observerMask & kCFRunLoopBeforeSources) {
             __CFRunLoopDoObservers(rl, rlm, kCFRunLoopBeforeSources);
         }
-        
+        // 处理block
         __CFRunLoopDoBlocks(rl, rlm);
-        
+        // 处理source0
         Boolean sourceHandledThisLoop = __CFRunLoopDoSources0(rl, rlm, stopAfterHandle);
         if (sourceHandledThisLoop) {
             __CFRunLoopDoBlocks(rl, rlm);
@@ -2784,6 +2785,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
         if (MACH_PORT_NULL != dispatchPort && !didDispatchPortLastTime) {
 #if TARGET_OS_MAC
             msg = (mach_msg_header_t *)msg_buffer;
+            // 判断有无source1
             if (__CFRunLoopServiceMachPort(dispatchPort, &msg, sizeof(msg_buffer), &livePort, 0, &voucherState, NULL, rl, rlm)) {
                 goto handle_msg;
             }
@@ -2800,7 +2802,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
 #endif
         
         didDispatchPortLastTime = false;
-        
+        // 即将休眠
         if (!poll && (rlm->_observerMask & kCFRunLoopBeforeWaiting)) __CFRunLoopDoObservers(rl, rlm, kCFRunLoopBeforeWaiting);
         __CFRunLoopSetSleeping(rl);
         // do not do any user callouts after this point (after notifying of sleeping)
@@ -2819,6 +2821,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
         
 #if TARGET_OS_MAC
 #if USE_DISPATCH_SOURCE_FOR_TIMERS
+        // 等待唤醒
         do {
             msg = (mach_msg_header_t *)msg_buffer;
             
@@ -2935,7 +2938,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
         }
 #endif
 #if USE_MK_TIMER_TOO
-        else if (rlm->_timerPort != MACH_PORT_NULL && livePort == rlm->_timerPort) {
+        else if (rlm->_timerPort != MACH_PORT_NULL && livePort == rlm->_timerPort) { // timer唤醒
             CFRUNLOOP_WAKEUP_FOR_TIMER();
             // On Windows, we have observed an issue where the timer port is set before the time which we requested it to be set. For example, we set the fire time to be TSR 167646765860, but it is actually observed firing at TSR 167646764145, which is 1715 ticks early. The result is that, when __CFRunLoopDoTimers checks to see if any of the run loop timers should be firing, it appears to be 'too early' for the next timer, and no timers are handled.
             // In this case, the timer port has been automatically reset (since it was returned from MsgWaitForMultipleObjectsEx), and if we do not re-arm it, then no timers will ever be serviced again unless something adjusts the timer list (e.g. adding or removing timers). The fix for the issue is to reset the timer here if CFRunLoopDoTimers did not handle a timer itself. 9308754
@@ -2956,7 +2959,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
         /* --- DISPATCHES  --- */
         
 #if __HAS_DISPATCH__
-        else if (livePort == dispatchPort) {
+        else if (livePort == dispatchPort) { // dispatch唤醒
             CFRUNLOOP_WAKEUP_FOR_DISPATCH();
             cf_trace(KDEBUG_EVENT_CFRL_WAKEUP_FOR_DISPATCH, rl, rlm, livePort, 0);
             __CFRunLoopModeUnlock(rlm);
@@ -2978,7 +2981,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
         
         /* --- SOURCE1S  --- */
         
-        else {
+        else { // 处理 source1
             CFRUNLOOP_WAKEUP_FOR_SOURCE();
             cf_trace(KDEBUG_EVENT_CFRL_WAKEUP_FOR_SOURCE, rl, rlm, 0, 0);
             // Despite the name, this works for windows handles as well
@@ -3050,6 +3053,7 @@ SInt32 CFRunLoopRunSpecific(CFRunLoopRef rl, CFStringRef modeName, CFTimeInterva
     }
     if (__CFRunLoopIsDeallocating(rl)) return kCFRunLoopRunFinished;
     __CFRunLoopLock(rl);
+    // 找到mode
     CFRunLoopModeRef currentMode = __CFRunLoopFindMode(rl, modeName, false);
     if (NULL == currentMode || __CFRunLoopModeIsEmpty(rl, currentMode, rl->_currentMode)) {
         Boolean did = false;
@@ -3062,10 +3066,15 @@ SInt32 CFRunLoopRunSpecific(CFRunLoopRef rl, CFStringRef modeName, CFTimeInterva
     rl->_currentMode = currentMode;
     int32_t result = kCFRunLoopRunFinished;
     
+    // 通知observer进入runloop
     if (currentMode->_observerMask & kCFRunLoopEntry ) __CFRunLoopDoObservers(rl, currentMode, kCFRunLoopEntry);
+    
     cf_trace(KDEBUG_EVENT_CFRL_RUN | DBG_FUNC_START, rl, currentMode, seconds, previousMode);
+    // 开始执行
     result = __CFRunLoopRun(rl, currentMode, seconds, returnAfterSourceHandled, previousMode);
     cf_trace(KDEBUG_EVENT_CFRL_RUN | DBG_FUNC_END, rl, currentMode, seconds, previousMode);
+    
+    // 通知observer退出
     if (currentMode->_observerMask & kCFRunLoopExit ) __CFRunLoopDoObservers(rl, currentMode, kCFRunLoopExit);
     
     __CFRunLoopModeUnlock(currentMode);
